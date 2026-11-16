@@ -52,7 +52,7 @@ var visParams = {
   gamma: 1.5,
 };
 
-Map.addLayer(rgb, visParams, 'RGB');
+Map.addLayer(rgb, visParams, 'NOAA');
 
 
 
@@ -89,7 +89,7 @@ var visualization = {
   bands: ['B4', 'B3', 'B2'],
 };
 
-Map.addLayer(dataset.mean(), visualization, 'RGB');
+Map.addLayer(dataset.mean(), visualization, 'Turbidity');
 
 
 //NASA Oceania
@@ -104,4 +104,4 @@ var remoteSensingReflectanceVis = {
 
 Map.addLayer(
     remoteSensingReflectance, remoteSensingReflectanceVis,
-    'Remote Sensing Reflectance');
+    'NASA');
