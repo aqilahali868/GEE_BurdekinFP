@@ -4,30 +4,30 @@ var gfd = ee.ImageCollection('GLOBAL_FLOOD_DB/MODIS_EVENTS/V1');
 var hurricaneIsaacDartmouthId = 3977;
 var hurricaneIsaacUsa = ee.Image(
     gfd.filterMetadata('id', 'equals', hurricaneIsaacDartmouthId).first());
-Map.setOptions('SATELLITE');
-Map.setCenter(-90.2922, 29.4064, 9);
-Map.addLayer(
+//Map.setOptions('SATELLITE');
+//Map.setCenter(-90.2922, 29.4064, 9);
+//Map.addLayer(
   hurricaneIsaacUsa.select('flooded').selfMask(),
   {min: 0, max: 1, palette: '001133'},
   'Hurricane Isaac - Inundation Extent');
 
 // The duration (number of days a flood event lasted).
 var durationPalette = ['c3effe', '1341e8', '051cb0', '001133'];
-Map.addLayer(
+//Map.addLayer(
   hurricaneIsaacUsa.select('duration').selfMask(),
   {min: 0, max: 4, palette: durationPalette},
   'Hurricane Isaac - Duration');
 
 // Map all floods to generate the satellite-observed historical flood plain.
 var gfdFloodedSum = gfd.select('flooded').sum();
-Map.addLayer(
+//Map.addLayer(
   gfdFloodedSum.selfMask(),
   {min: 0, max: 10, palette: durationPalette},
   'GFD Satellite Observed Flood Plain');
 
 // Overlay permanent water to distinguish flood water.
 var jrc = gfd.select('jrc_perm_water').sum().gte(1);
-Map.addLayer(
+//Map.addLayer(
   jrc.selfMask(),
   {min: 0, max: 1, palette: 'C3EFFE'},
   'JRC Permanent Water');
@@ -52,9 +52,7 @@ var visParams = {
   gamma: 1.5,
 };
 
-Map.setCenter(46.043, 1.45, 5);
 Map.addLayer(rgb, visParams, 'RGB');
-
 
 
 
@@ -91,9 +89,8 @@ var visualization = {
   bands: ['B4', 'B3', 'B2'],
 };
 
-Map.setCenter(83.277, 17.7009, 12);
-
 Map.addLayer(dataset.mean(), visualization, 'RGB');
+
 
 //NASA Oceania
 var dataset = ee.ImageCollection('NASA/OCEANDATA/MODIS-Aqua/L3SMI')
@@ -104,7 +101,7 @@ var remoteSensingReflectanceVis = {
   min: 0.0,
   max: 0.011,
 };
-Map.setCenter(-52.12, -46.13, 4);
+
 Map.addLayer(
     remoteSensingReflectance, remoteSensingReflectanceVis,
     'Remote Sensing Reflectance');
