@@ -6,7 +6,7 @@ var stations = ee.FeatureCollection([
 ]);
 
 var roi = ee.Geometry.Rectangle([146.70, -19.75, 147.85, -18.80]);
-Map.centerObject(roi, 9);
+Map.centerObject(roi, 10);
 
 // 2. Sentinel-2 (10 m) Peak Plume vs. Post-Dissipation Cleared Water
 // Matched to 120006B peak (2024-02-04) and post-recovery (>2024-04-25)
@@ -16,6 +16,7 @@ var s2Peak = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
   .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
   .median()
   .clip(roi);
+Map.addLayer(s2Peak, rgbVis, '1. Peak Plume True Color (Feb 2024)');
 
 var s2Clear = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
   .filterBounds(roi)
@@ -23,20 +24,23 @@ var s2Clear = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
   .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 25))
   .median()
   .clip(roi);
+Map.addLayer(s2Clear, rgbVis, '2. Cleared Water True Color (Late Apr 2024)');
 
 // Normalized Difference Turbidity Index: NDTI = (Red - Green) / (Red + Green)
 var ndtiPeak  = s2Peak.normalizedDifference(['B4', 'B3']).rename('NDTI');
+Map.addLayer(ndtiPeak, ndtiVis, '3. Peak Plume NDTI');
+
+
 var ndtiClear = s2Clear.normalizedDifference(['B4', 'B3']).rename('NDTI');
+Map.addLayer(ndtiClear, ndtiVis, '4. Cleared Water NDTI');
 
 // Identical stretch parameters ensure valid visual comparison across dates
 var rgbVis  = {bands: ['B4', 'B3', 'B2'], min: 0, max: 2500, gamma: 1.2};
 var ndtiVis = {min: -0.30, max: 0.15, palette: ['#08306b', '#41b6c4', '#ffffbf', '#d95f0e']};
 
-Map.addLayer(s2Peak, rgbVis, '1. Peak Plume True Color (Feb 2024)');
-Map.addLayer(s2Clear, rgbVis, '2. Cleared Water True Color (Late Apr 2024)');
-Map.addLayer(ndtiPeak, ndtiVis, '3. Peak Plume NDTI');
-Map.addLayer(ndtiClear, ndtiVis, '4. Cleared Water NDTI');
+
 Map.addLayer(stations, {color: 'red'}, 'Reef Transect Stations');
+
 
 // 3. Extract Daily Sentinel-3 OLCI Red/Blue Turbidity Ratio (Nov 2023 - May 2024)
 var s3 = ee.ImageCollection('COPERNICUS/S3/OLCI')
