@@ -52,23 +52,10 @@ var visParams = {
   gamma: 1.5,
 };
 
-
-//NASA Oceania 
-var dataset = ee.ImageCollection('NASA/OCEANDATA/MODIS-Aqua/L3SMI')
-                  .filterDate('2016-01-01', '2016-01-31');
-var remoteSensingReflectance =
-    dataset.select(['Rrs_645', 'Rrs_555', 'Rrs_443']);
-var remoteSensingReflectanceVis = {
-  min: 0.0,
-  max: 0.011,
-};
-Map.setCenter(-52.12, -46.13, 4);
-Map.addLayer(
-    remoteSensingReflectance, remoteSensingReflectanceVis,
-    'Remote Sensing Reflectance');
-
 Map.setCenter(46.043, 1.45, 5);
 Map.addLayer(rgb, visParams, 'RGB');
+
+
 
 
 
@@ -107,3 +94,17 @@ var visualization = {
 Map.setCenter(83.277, 17.7009, 12);
 
 Map.addLayer(dataset.mean(), visualization, 'RGB');
+
+//NASA Oceania
+var dataset = ee.ImageCollection('NASA/OCEANDATA/MODIS-Aqua/L3SMI')
+                  .filterDate('2016-01-01', '2016-01-31');
+var remoteSensingReflectance =
+    dataset.select(['Rrs_645', 'Rrs_555', 'Rrs_443']);
+var remoteSensingReflectanceVis = {
+  min: 0.0,
+  max: 0.011,
+};
+Map.setCenter(-52.12, -46.13, 4);
+Map.addLayer(
+    remoteSensingReflectance, remoteSensingReflectanceVis,
+    'Remote Sensing Reflectance');
