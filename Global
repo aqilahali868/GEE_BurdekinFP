@@ -33,7 +33,7 @@ var jrc = gfd.select('jrc_perm_water').sum().gte(1);
  // 'JRC Permanent Water');
   
   
-// NOAA Sea Surface Temparature 
+// NOAA Sea Surface Temparature **need to remove clouds
   ee.ImageCollection("NOAA/CDR/OISST/V2_1")
   
 // Flood plume disspiation 2016 - 2026 
