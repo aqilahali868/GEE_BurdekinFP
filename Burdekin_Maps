@@ -1,0 +1,187 @@
+// =========================================================================
+// BURDEKIN FLOOD PLUME SPATIAL MAPPING (MATCHED TO RSTUDIO WORKUP)
+// =========================================================================
+
+// 1. Define Visualization Palettes FIRST (fixes undefined stretch bug)
+var rgbVis = {bands: ['B4', 'B3', 'B2'], min: 0, max: 2200, gamma: 1.25};
+
+// Diverging Blue -> Cyan -> Yellow -> Orange-Red turbidity ramp
+var ndtiVis = {
+  min: -0.28,
+  max: 0.12,
+  palette: ['#08306b', '#2b8cbe', '#a6bddb', '#fee090', '#d95f0e']
+};
+
+// 2. Exact Open-Water Transect Stations (matched to Burdekin_S3_Plume_TimeSeries.csv)
+// Colored with the same Okabe-Ito hex codes used in RStudio ggplot2 figures
+var stations = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([147.66, -19.62]), {
+    station: 'S1_Burdekin_Mouth', dist_km: 4,
+    style: {color: 'FFFFFF', fillColor: 'D55E00', pointSize: 7, width: 2}
+  }),
+  ee.Feature(ee.Geometry.Point([146.91, -19.15]), {
+    station: 'S2_Magnetic_Island', dist_km: 88,
+    style: {color: 'FFFFFF', fillColor: '0072B2', pointSize: 7, width: 2}
+  }),
+  ee.Feature(ee.Geometry.Point([147.64, -18.82]), {
+    station: 'S3_Davies_Reef', dist_km: 135,
+    style: {color: 'FFFFFF', fillColor: '009E73', pointSize: 7, width: 2}
+  })
+]);
+
+var roi = ee.Geometry.Rectangle([146.68, -19.75, 147.85, -18.78]);
+Map.centerObject(roi, 9);
+Map.setOptions('SATELLITE');
+
+// 3. Sentinel-2 Cloud Masking (using Scene Classification Layer SCL)
+function maskS2Clouds(img) {
+  var scl = img.select('SCL');
+  // Exclude cloud shadows (3), medium/high clouds (8, 9), and thin cirrus (10)
+  var clear = scl.neq(3).and(scl.neq(8)).and(scl.neq(9)).and(scl.neq(10));
+  return img.updateMask(clear);
+}
+
+// 4. Peak Plume (around 4 Feb 2024 discharge peak: 212,272 ML/day)
+var s2Peak = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(roi)
+  .filterDate('2024-02-01', '2024-02-15')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 40))
+  .map(maskS2Clouds)
+  .median()
+  .clip(roi);
+
+// 5. Post-Dissipation Cleared Water (around 25 Apr 2024 Q90 baseline recovery)
+var s2Clear = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(roi)
+  .filterDate('2024-04-20', '2024-05-05')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 35))
+  .map(maskS2Clouds)
+  .median()
+  .clip(roi);
+
+// 6. Water-Only NDTI = (Red - Green) / (Red + Green)
+// Masking land via NDWI prevents coastal hills/soil from turning orange
+function calcWaterNDTI(img) {
+  var ndwi = img.normalizedDifference(['B3', 'B8']);
+  var ndti = img.normalizedDifference(['B4', 'B3']).rename('NDTI');
+  return ndti.updateMask(ndwi.gt(-0.1));
+}
+
+var ndtiPeak  = calcWaterNDTI(s2Peak);
+var ndtiClear = calcWaterNDTI(s2Clear);
+
+// 7. Add Layers in Logical Order (toggle checkboxes in top-right "Layers" menu)
+Map.addLayer(s2Clear, rgbVis, '4. Cleared Water True Color (Late Apr 2024)', false);
+Map.addLayer(ndtiClear, ndtiVis, '3. Cleared Water NDTI (Late Apr 2024)', false);
+Map.addLayer(s2Peak, rgbVis, '2. Peak Plume True Color (Feb 2024)', true);
+Map.addLayer(ndtiPeak, ndtiVis, '1. Peak Plume NDTI (Feb 2024)', true);
+Map.addLayer(stations.style({styleProperty: 'style'}), {}, 'Reef Transect Stations', true);
+
+// 8. On-Map Legend (NDTI Turbidity Scale + Color-Matched Transect Stations)
+var legend = ui.Panel({
+  style: {position: 'bottom-left', padding: '10px 14px', backgroundColor: 'rgba(255,255,255,0.92)'}
+});
+
+legend.add(ui.Label({
+  value: 'Sentinel-2 Water Turbidity (NDTI)',
+  style: {fontWeight: 'bold', fontSize: '13px', margin: '0 0 6px 0'}
+}));
+
+var palette = ndtiVis.palette;
+var labels  = ['-0.28 (Clear Coral Sea)', '-0.18 (Low)', '-0.08 (Dilute Plume)', '+0.02 (Moderate)', '+0.12 (Dense Sediment)'];
+
+for (var i = 0; i < palette.length; i++) {
+  var row = ui.Panel({
+    widgets: [
+      ui.Label({style: {backgroundColor: palette[i], padding: '8px', margin: '0 8px 4px 0'}}),
+      ui.Label({value: labels[i], style: {fontSize: '11px', margin: '0 0 4px 0'}})
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+  legend.add(row);
+}
+
+legend.add(ui.Label({
+  value: 'Transect Stations (Matched to R Plots)',
+  style: {fontWeight: 'bold', fontSize: '12px', margin: '8px 0 4px 0'}
+}));
+
+var stNames  = ['S1: Burdekin Mouth (4 km)', 'S2: Magnetic Island (88 km)', 'S3: Davies Reef (135 km)'];
+var stColors = ['#D55E00', '#0072B2', '#009E73'];
+
+for (var j = 0; j < stNames.length; j++) {
+  legend.add(ui.Panel({
+    widgets: [
+      ui.Label({style: {backgroundColor: stColors[j], padding: '6px', margin: '0 8px 3px 0'}}),
+      ui.Label({value: stNames[j], style: {fontSize: '11px', margin: '0 0 3px 0'}})
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  }));
+}
+
+Map.add(legend);
+
+
+// =========================================================================
+// REPRODUCIBLE EXPORTS (CSV FOR RSTUDIO + HIGH-RES MAP IMAGES)
+// =========================================================================
+
+// Sentinel-3 OLCI Daily Turbidity CSV (feeds BurdekinCatchment.Rmd)
+var s3 = ee.ImageCollection('COPERNICUS/S3/OLCI')
+  .filterBounds(roi)
+  .filterDate('2023-11-01', '2024-05-01')
+  .select(['Oa08_radiance', 'Oa04_radiance', 'quality_flags']);
+
+// Apply a 1 km open-water buffer around the Section 2 station points
+var bufferedStations = stations.map(function(feat) {
+  return feat.buffer(1000);
+});
+
+var s3TimeSeries = s3.map(function(img) {
+  var qf = img.select('quality_flags');
+  var notLand  = qf.bitwiseAnd(Math.pow(2, 31)).eq(0);
+  var notCloud = qf.bitwiseAnd(Math.pow(2, 27)).eq(0).and(img.select('Oa08_radiance').lt(120));
+
+  var turbRatio = img.select('Oa08_radiance')
+    .divide(img.select('Oa04_radiance'))
+    .updateMask(notLand.and(notCloud))
+    .rename('s3_turbidity_ratio');
+
+  var dateStr = img.date().format('YYYY-MM-dd');
+
+  return turbRatio.reduceRegions({
+    collection: bufferedStations,
+    reducer: ee.Reducer.mean(),
+    scale: 300
+  }).map(function(feat) {
+    return feat.set({
+      'date': dateStr,
+      's3_turbidity_ratio': feat.get('mean')
+    });
+  });
+}).flatten().filter(ee.Filter.notNull(['s3_turbidity_ratio']));
+
+//Export.table.toDrive({
+//  collection: s3TimeSeries,
+//  description: 'Burdekin_S3_Plume_TimeSeries',
+//  fileFormat: 'CSV',
+//  selectors: ['station', 'dist_km', 'date', 's3_turbidity_ratio']
+//});
+
+// B. (Optional) Export Color-Rendered Sentinel-2 NDTI Maps to Google Drive
+Export.image.toDrive({
+  image: ndtiPeak.visualize(ndtiVis),
+  description: 'S2_NDTI_PeakPlume_Feb2024',
+  region: roi,
+  scale: 30,
+  maxPixels: 1e9
+});
+
+Export.image.toDrive({
+  image: ndtiClear.visualize(ndtiVis),
+  description: 'S2_NDTI_ClearedWater_Apr2024',
+  region: roi,
+  scale: 30,
+  maxPixels: 1e9
+});
+

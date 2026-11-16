@@ -1,0 +1,133 @@
+// =========================================================================
+// MB5370 Spatial Analysis: Burdekin Flood Plume & Reef Turbidity Recovery
+// =========================================================================
+
+// 1. GLOBAL VARIABLES & VISUALISATION PARAMETERS
+var distance = 1000; // 1 km sampling buffer around transect stations (m)
+var roi = ee.Geometry.Rectangle([146.68, -19.75, 147.85, -18.78]);
+
+var rgbVis  = {bands: ['B4', 'B3', 'B2'], min: 0, max: 2200, gamma: 1.25};
+var ndtiVis = {min: -0.28, max: 0.12, palette: ['#08306b', '#2b8cbe', '#a6bddb', '#fee090', '#d95f0e']};
+
+// 2. TRANSECT STATIONS & 1 KM BUFFERS (Workshop 4)
+var s1 = ee.Feature(ee.Geometry.Point([147.66, -19.62]), {station: 'S1_Burdekin_Mouth', dist_km: 4});
+var s2 = ee.Feature(ee.Geometry.Point([146.91, -19.15]), {station: 'S2_Magnetic_Island', dist_km: 88});
+var s3 = ee.Feature(ee.Geometry.Point([147.64, -18.82]), {station: 'S3_Davies_Reef', dist_km: 135});
+
+var stations = ee.FeatureCollection([s1, s2, s3]);
+var bufferer = function(feat) { return feat.buffer(distance); };
+var bufferedStations = stations.map(bufferer);
+
+// 3. SENTINEL-2 COMPOSITES & WATER-MASKED NDTI (Workshops 2 & 3)
+var maskClouds = function(img) {
+  var scl = img.select('SCL');
+  var clear = scl.neq(3).and(scl.neq(8)).and(scl.neq(9)).and(scl.neq(10));
+  return img.updateMask(clear);
+};
+
+// Helper: builds a cloud-free median composite + adds a water-only NDTI band
+var makeS2Composite = function(startDate, endDate, maxCloud) {
+  var comp = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+    .filterBounds(roi)
+    .filterDate(startDate, endDate)
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', maxCloud))
+    .map(maskClouds)
+    .median()
+    .clip(roi);
+  
+  var waterMask = comp.normalizedDifference(['B3', 'B8']).gt(-0.1); // NDWI > -0.1
+  var ndti = comp.normalizedDifference(['B4', 'B3']).rename('NDTI').updateMask(waterMask);
+  return comp.addBands(ndti);
+};
+
+var s2Peak  = makeS2Composite('2024-02-01', '2024-02-15', 40); // Peak flow (4 Feb 2024)
+var s2Clear = makeS2Composite('2024-04-20', '2024-05-05', 35); // Baseline recovery (25 Apr 2024)
+
+// 4. PLUME FOOTPRINT AREA (km2) & STATION RANKING (Workshops 2 & 4)
+var calcPlumeArea = function(img) {
+  var area = img.select('NDTI').gt(-0.15).selfMask()
+    .multiply(ee.Image.pixelArea())
+    .reduceRegion({reducer: ee.Reducer.sum(), geometry: roi, scale: 100, maxPixels: 1e9});
+  return ee.Number(area.get('NDTI')).divide(1e6);
+};
+
+print('Peak Plume Area (km2):', calcPlumeArea(s2Peak));
+print('Post-Recovery Plume Area (km2):', calcPlumeArea(s2Clear));
+
+var stationPeakNDTI = s2Peak.select('NDTI').reduceRegions({
+  collection: bufferedStations,
+  reducer: ee.Reducer.mean(),
+  scale: 30
+});
+print('Stations Sorted by Peak NDTI:', stationPeakNDTI.sort('mean', false));
+
+// 5. SENTINEL-3 OLCI DAILY TURBIDITY TIME-SERIES (Nov 2023 - May 2024)
+var waterMask = s2Clear.select('NDTI').mask();
+
+var extractS3 = function(img) {
+  var red  = img.select('Oa08_radiance');
+  var blue = img.select('Oa04_radiance');
+  var turbRatio = red.divide(blue).updateMask(red.lt(120).and(waterMask)).rename('s3_turbidity_ratio');
+  var dateStr = img.date().format('YYYY-MM-dd');
+  
+  return turbRatio.reduceRegions({
+    collection: bufferedStations,
+    reducer: ee.Reducer.mean(),
+    scale: 300
+  }).map(function(feat) {
+    return feat.set({'date': dateStr, 's3_turbidity_ratio': feat.get('mean')});
+  });
+};
+
+var s3TimeSeries = ee.ImageCollection('COPERNICUS/S3/OLCI')
+  .filterBounds(roi)
+  .filterDate('2023-11-01', '2024-05-01')
+  .select(['Oa08_radiance', 'Oa04_radiance'])
+  .map(extractS3)
+  .flatten()
+  .filter(ee.Filter.notNull(['s3_turbidity_ratio']));
+
+// 6. MAP DISPLAY & COMPACT LEGEND (Workshops 1 & 2)
+Map.setOptions('SATELLITE');
+Map.centerObject(roi, 9);
+
+Map.addLayer(s2Clear, rgbVis, '4. Cleared Water True Color (Apr 2024)', false);
+Map.addLayer(s2Clear.select('NDTI'), ndtiVis, '3. Cleared Water NDTI (Apr 2024)', false, 0.9);
+Map.addLayer(s2Peak, rgbVis, '2. Peak Plume True Color (Feb 2024)', true);
+Map.addLayer(s2Peak.select('NDTI'), ndtiVis, '1. Peak Plume NDTI (Feb 2024)', true, 0.9);
+
+Map.addLayer(ee.FeatureCollection([s1]), {color: 'D55E00'}, 'S1: Burdekin Mouth (4 km)');
+Map.addLayer(ee.FeatureCollection([s2]), {color: '0072B2'}, 'S2: Magnetic Island (88 km)');
+Map.addLayer(ee.FeatureCollection([s3]), {color: '009E73'}, 'S3: Davies Reef (135 km)');
+
+var legend = ui.Panel({style: {position: 'bottom-left', padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.92)'}});
+var addLegendRow = function(hex, text) {
+  legend.add(ui.Panel({
+    widgets: [
+      ui.Label({style: {backgroundColor: hex, padding: '7px', margin: '0 8px 3px 0'}}),
+      ui.Label({value: text, style: {fontSize: '11px', margin: '0 0 3px 0'}})
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  }));
+};
+
+legend.add(ui.Label({value: 'Sentinel-2 Turbidity (NDTI)', style: {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}}));
+addLegendRow('#08306b', '-0.28 (Clear Coral Sea)');
+addLegendRow('#a6bddb', '-0.08 (Dilute Plume)');
+addLegendRow('#fee090', '+0.02 (Moderate)');
+addLegendRow('#d95f0e', '+0.12 (Dense Sediment)');
+
+legend.add(ui.Label({value: 'Reef Transect Stations', style: {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0'}}));
+addLegendRow('#D55E00', 'S1: Burdekin Mouth (4 km)');
+addLegendRow('#0072B2', 'S2: Magnetic Island (88 km)');
+addLegendRow('#009E73', 'S3: Davies Reef (135 km)');
+Map.add(legend);
+
+// 7. EXPORT CSV FOR RSTUDIO (Workshop 4)
+Export.table.toDrive({
+  collection: s3TimeSeries,
+  description: 'exportS3TimeSeriesToDrive',
+  fileNamePrefix: 'Burdekin_S3_Plume_TimeSeries',
+  fileFormat: 'CSV',
+  selectors: ['station', 'dist_km', 'date', 's3_turbidity_ratio']
+});
