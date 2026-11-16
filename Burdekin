@@ -1,0 +1,65 @@
+// 1. Inshore-to-Offshore Reef Transect (Burdekin Mouth -> Magnetic Island -> Mid-Shelf)
+var stations = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([147.62, -19.63]), {station: 'S1_Burdekin_Mouth', dist_km: 2}),
+  ee.Feature(ee.Geometry.Point([146.86, -19.15]), {station: 'S2_Magnetic_Island', dist_km: 88}),
+  ee.Feature(ee.Geometry.Point([147.64, -18.82]), {station: 'S3_Davies_Reef', dist_km: 135})
+]);
+
+var roi = ee.Geometry.Rectangle([146.70, -19.75, 147.85, -18.80]);
+Map.centerObject(roi, 9);
+
+// 2. Sentinel-2 (10 m) Peak Plume vs. Post-Dissipation Cleared Water
+// Matched to 120006B peak (2024-02-04) and post-recovery (>2024-04-25)
+var s2Peak = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(roi)
+  .filterDate('2024-02-02', '2024-02-12')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+  .median()
+  .clip(roi);
+
+var s2Clear = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(roi)
+  .filterDate('2024-04-25', '2024-05-05')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 25))
+  .median()
+  .clip(roi);
+
+// Normalized Difference Turbidity Index: NDTI = (Red - Green) / (Red + Green)
+var ndtiPeak  = s2Peak.normalizedDifference(['B4', 'B3']).rename('NDTI');
+var ndtiClear = s2Clear.normalizedDifference(['B4', 'B3']).rename('NDTI');
+
+// Identical stretch parameters ensure valid visual comparison across dates
+var rgbVis  = {bands: ['B4', 'B3', 'B2'], min: 0, max: 2500, gamma: 1.2};
+var ndtiVis = {min: -0.30, max: 0.15, palette: ['#08306b', '#41b6c4', '#ffffbf', '#d95f0e']};
+
+Map.addLayer(s2Peak, rgbVis, '1. Peak Plume True Color (Feb 2024)');
+Map.addLayer(s2Clear, rgbVis, '2. Cleared Water True Color (Late Apr 2024)');
+Map.addLayer(ndtiPeak, ndtiVis, '3. Peak Plume NDTI');
+Map.addLayer(ndtiClear, ndtiVis, '4. Cleared Water NDTI');
+Map.addLayer(stations, {color: 'red'}, 'Reef Transect Stations');
+
+// 3. Extract Daily Sentinel-3 OLCI Red/Blue Turbidity Ratio (Nov 2023 - May 2024)
+var s3 = ee.ImageCollection('COPERNICUS/S3/OLCI')
+  .filterBounds(roi)
+  .filterDate('2023-11-01', '2024-05-01')
+  .select(['Oa08_radiance', 'Oa04_radiance']);
+
+var s3TimeSeries = s3.map(function(img) {
+  var turbRatio = img.select('Oa08_radiance')
+    .divide(img.select('Oa04_radiance'))
+    .rename('s3_turbidity_ratio');
+  var dateStr = img.date().format('YYYY-MM-dd');
+  return turbRatio.reduceRegions({
+    collection: stations,
+    reducer: ee.Reducer.mean(),
+    scale: 300
+  }).map(function(feat) {
+    return feat.set('date', dateStr);
+  });
+}).flatten().filter(ee.Filter.notNull(['s3_turbidity_ratio']));
+
+Export.table.toDrive({
+  collection: s3TimeSeries,
+  description: 'Burdekin_S3_Plume_TimeSeries',
+  fileFormat: 'CSV'
+});
