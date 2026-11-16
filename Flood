@@ -1,0 +1,49 @@
+// 1. Define inshore-to-offshore transect points (Burdekin Mouth -> Mid-Shelf Reef)
+var stations = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([147.62, -19.63]), {station: 'S1_Burdekin_Mouth', dist_km: 2}),
+  ee.Feature(ee.Geometry.Point([147.25, -19.40]), {station: 'S2_Bowling_Green', dist_km: 42}),
+  ee.Feature(ee.Geometry.Point([146.86, -19.15]), {station: 'S3_Magnetic_Island', dist_km: 88}),
+  ee.Feature(ee.Geometry.Point([147.06, -18.85]), {station: 'S4_Lodestone_Reef', dist_km: 112}),
+  ee.Feature(ee.Geometry.Point([147.64, -18.82]), {station: 'S5_Davies_Reef', dist_km: 135})
+]);
+
+var roi = stations.geometry().bounds().buffer(35000);
+Map.centerObject(roi, 9);
+
+// 2. Sentinel-2 Peak Flood Image (Feb 2025) & NDTI Turbidity Index
+var s2Flood = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(roi)
+  .filterDate('2025-02-10', '2025-02-16')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 25))
+  .median()
+  .clip(roi);
+
+// NDTI = (Red - Green) / (Red + Green) -> positive values indicate turbid sediment plumes
+var ndti = s2Flood.normalizedDifference(['B4', 'B3']).rename('NDTI');
+
+Map.addLayer(s2Flood, {bands: ['B4', 'B3', 'B2'], min: 0, max: 2500}, 'Sentinel-2 True Color (Feb 2025)');
+Map.addLayer(ndti, {min: -0.3, max: 0.2, palette: ['#08306b', '#41b6c4', '#ffffbf', '#d95f0e']}, 'Flood Plume NDTI');
+Map.addLayer(stations, {color: 'red'}, 'Transect Stations');
+
+// 3. Extract MODIS-Aqua Chlorophyll-a & Kd490 Time-Series (Jan - Apr 2025)
+var modis = ee.ImageCollection('NASA/OCEANDATA/MODIS-Aqua/L3SMI')
+  .filterDate('2025-01-01', '2025-04-30')
+  .select(['chlor_a', 'Kd_490']);
+
+var timeSeries = modis.map(function(img) {
+  var dateStr = img.date().format('YYYY-MM-dd');
+  return img.reduceRegions({
+    collection: stations,
+    reducer: ee.Reducer.mean(),
+    scale: 4000
+  }).map(function(feat) {
+    return feat.set('date', dateStr);
+  });
+}).flatten().filter(ee.Filter.notNull(['chlor_a']));
+
+// 4. Export CSV to Google Drive
+Export.table.toDrive({
+  collection: timeSeries,
+  description: 'Burdekin_Plume_GEE_TimeSeries',
+  fileFormat: 'CSV'
+});
