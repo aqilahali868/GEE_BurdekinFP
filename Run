@@ -1,41 +1,288 @@
-// 1. Inshore-to-offshore transect (Burdekin Mouth -> Magnetic Island -> Mid-Shelf)
-var stations = ee.FeatureCollection([
-  ee.Feature(ee.Geometry.Point([147.62, -19.63]), {station: 'S1_Burdekin_Mouth', dist_km: 2}),
-  ee.Feature(ee.Geometry.Point([146.86, -19.15]), {station: 'S2_Magnetic_Island', dist_km: 88}),
-  ee.Feature(ee.Geometry.Point([147.64, -18.82]), {station: 'S3_Davies_Reef', dist_km: 135})
-]);
-var roi = stations.geometry().bounds().buffer(30000);
-Map.centerObject(roi, 9);
+// =========================================================================
+// MB5370 Environmental Computing - Spatial Analysis Component
+// Title: Tracking Burdekin Flood Plumes & Water Quality Recovery on the GBR
+// Author: Aqilah Sakinah Ali
+// =========================================================================
 
-// 2. High-res Sentinel-2 Pre- vs Post-Flood Plume Maps (10 m)
+// *************************************************************************
+// 1. GLOBAL VARIABLES & VISUALISATION PARAMETERS
+// *************************************************************************
+
+var distance = 1000; // 1 km open-water sampling buffer around stations (m)
+var roi = ee.Geometry.Rectangle([146.68, -19.75, 147.85, -18.78]);
+
+var rgbVis = {
+  bands: ['B4', 'B3', 'B2'],
+  min: 0,
+  max: 2200,
+  gamma: 1.25
+};
+
+var ndtiVis = {
+  min: -0.28,
+  max: 0.12,
+  palette: ['08306b', '2b8cbe', 'a6bddb', 'fee090', 'd95f0e']
+};
+
+var changeVis = {
+  min: -0.05,
+  max: 0.25,
+  palette: ['2b8cbe', 'f7f7f7', 'fee090', 'd95f0e']
+};
+
+// *************************************************************************
+// 2. RESEARCH & TRANSECT STATION LOCATIONS (Workshop 4, Sec. 5.3)
+// *************************************************************************
+
+var s1 = ee.Feature(ee.Geometry.Point([147.66, -19.62]), {
+  station: 'S1_Burdekin_Mouth',
+  dist_km: 4
+});
+
+var s2 = ee.Feature(ee.Geometry.Point([146.91, -19.15]), {
+  station: 'S2_Magnetic_Island',
+  dist_km: 88
+});
+
+var s3 = ee.Feature(ee.Geometry.Point([147.64, -18.82]), {
+  station: 'S3_Davies_Reef',
+  dist_km: 135
+});
+
+var stations = ee.FeatureCollection([s1, s2, s3]);
+print('Transect Stations:', stations);
+
+// *************************************************************************
+// 3. VECTOR OPERATIONS: BUFFERING STATIONS (Workshop 4, Sec. 5.5.3)
+// *************************************************************************
+
+var bufferer = function(feature) {
+  var buffered = feature.buffer(distance);
+  return buffered;
+};
+
+var bufferedStations = stations.map(bufferer);
+
+// *************************************************************************
+// 4. IMAGE COLLECTIONS, FILTERING & REDUCERS (Workshop 2, Sec. 3.3 & 3.7)
+// *************************************************************************
+
+// Cloud masking function using Sentinel-2 Scene Classification Layer (SCL)
+var maskS2Clouds = function(image) {
+  var scl = image.select('SCL');
+  // Exclude cloud shadows (3), medium/high clouds (8, 9), and cirrus (10)
+  var clear = scl.neq(3)
+    .and(scl.neq(8))
+    .and(scl.neq(9))
+    .and(scl.neq(10));
+  return image.updateMask(clear);
+};
+
+// Peak flood composite (4 Feb 2024 discharge peak: 212,272 ML/day)
 var s2Peak = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
   .filterBounds(roi)
-  .filterDate('2025-02-10', '2025-02-16')
-  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 25))
-  .median().clip(roi);
+  .filterDate('2024-02-01', '2024-02-15')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 40))
+  .map(maskS2Clouds)
+  .median()
+  .clip(roi);
 
-var ndti = s2Peak.normalizedDifference(['B4', 'B3']).rename('NDTI');
-Map.addLayer(s2Peak, {bands: ['B4', 'B3', 'B2'], min: 0, max: 2500}, 'S2 True Color (Peak Plume)');
-Map.addLayer(ndti, {min: -0.3, max: 0.2, palette: ['#08306b', '#41b6c4', '#ffffbf', '#d95f0e']}, 'S2 NDTI Turbidity');
-
-// 3. Daily Sentinel-3 OLCI Time-Series for Dissipation Rate Modeling (300 m)
-var s3 = ee.ImageCollection('COPERNICUS/S3/OLCI')
+// Post-dissipation composite (25 Apr 2024 Q90 baseline recovery)
+var s2Clear = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
   .filterBounds(roi)
-  .filterDate('2025-01-01', '2025-04-30')
+  .filterDate('2024-04-20', '2024-05-05')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 35))
+  .map(maskS2Clouds)
+  .median()
+  .clip(roi);
+
+// *************************************************************************
+// 5. IMAGE COMPUTATIONS, THRESHOLDING & DIFFERENCING (Workshop 2 & 3)
+// *************************************************************************
+
+// Create binary water mask using NDWI > -0.1 (excludes coastal land/soil)
+var ndwi = s2Clear.normalizedDifference(['B3', 'B8']);
+var waterMask = ndwi.gt(-0.1);
+
+// Compute Normalised Difference Turbidity Index: (Red - Green) / (Red + Green)
+var ndtiPeak = s2Peak.normalizedDifference(['B4', 'B3'])
+  .rename('NDTI')
+  .updateMask(waterMask);
+
+var ndtiClear = s2Clear.normalizedDifference(['B4', 'B3'])
+  .rename('NDTI')
+  .updateMask(waterMask);
+
+// Subtract post-recovery baseline from peak flood (Workshop 3, Sec. 4.5)
+var ndtiChange = ndtiPeak.subtract(ndtiClear).rename('NDTI_change');
+
+// *************************************************************************
+// 6. REGION REDUCERS: PLUME AREA & STATION TIME-SERIES (Workshop 2 & 4)
+// *************************************************************************
+
+// A. Calculate flood plume area (km2) where NDTI > -0.15 (Workshop 2, Sec. 3.6)
+var plumeBinaryPeak = ndtiPeak.gt(-0.15).selfMask();
+var plumeAreaPeak = plumeBinaryPeak
+  .multiply(ee.Image.pixelArea())
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: roi,
+    scale: 100,
+    maxPixels: 1e9
+  });
+
+print('Peak Plume Footprint Area (km2):',
+  ee.Number(plumeAreaPeak.get('NDTI')).divide(1000 * 1000));
+
+var plumeBinaryClear = ndtiClear.gt(-0.15).selfMask();
+var plumeAreaClear = plumeBinaryClear
+  .multiply(ee.Image.pixelArea())
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: roi,
+    scale: 100,
+    maxPixels: 1e9
+  });
+
+print('Post-Recovery Plume Footprint Area (km2):',
+  ee.Number(plumeAreaClear.get('NDTI')).divide(1000 * 1000));
+
+// B. Check mean Peak NDTI per station buffer & sort highest-first (Sec. 4.7)
+var stationPeakNDTI = ndtiPeak.reduceRegions({
+  collection: bufferedStations,
+  reducer: ee.Reducer.mean(),
+  scale: 30
+});
+print('Stations Sorted by Peak NDTI:', stationPeakNDTI.sort('mean', false));
+
+// C. Sentinel-3 OLCI Daily Turbidity Time-Series across Buffered Stations
+var s3Collection = ee.ImageCollection('COPERNICUS/S3/OLCI')
+  .filterBounds(roi)
+  .filterDate('2023-11-01', '2024-05-01')
   .select(['Oa08_radiance', 'Oa04_radiance']);
 
-var dissipationTS = s3.map(function(img) {
-  var turbidityRatio = img.select('Oa08_radiance').divide(img.select('Oa04_radiance')).rename('Red_Blue_Ratio');
-  var dateStr = img.date().format('YYYY-MM-dd');
-  return turbidityRatio.reduceRegions({
-    collection: stations,
+var extractS3Turbidity = function(image) {
+  var red = image.select('Oa08_radiance');
+  var blue = image.select('Oa04_radiance');
+  
+  // Threshold bright cloud pixels (red radiance < 120) and mask to water
+  var clearWater = red.lt(120).and(waterMask);
+  var turbRatio = red.divide(blue)
+    .updateMask(clearWater)
+    .rename('s3_turbidity_ratio');
+    
+  var dateStr = image.date().format('YYYY-MM-dd');
+  
+  return turbRatio.reduceRegions({
+    collection: bufferedStations,
     reducer: ee.Reducer.mean(),
     scale: 300
-  }).map(function(f) { return f.set('date', dateStr); });
-}).flatten().filter(ee.Filter.notNull(['Red_Blue_Ratio']));
+  }).map(function(feat) {
+    return feat.set({
+      'date': dateStr,
+      's3_turbidity_ratio': feat.get('mean')
+    });
+  });
+};
+
+var s3TimeSeries = s3Collection
+  .map(extractS3Turbidity)
+  .flatten()
+  .filter(ee.Filter.notNull(['s3_turbidity_ratio']));
+
+print('Sample Sentinel-3 Time-Series Record:', s3TimeSeries.first());
+
+// *************************************************************************
+// 7. VISUALISING DATA IN THE MAP WINDOW (Workshop 1, Sec. 2.10)
+// *************************************************************************
+
+Map.setOptions('SATELLITE');
+Map.centerObject(roi, 9);
+
+// Add raster layers (toggle in Layers panel; opacity = 0.9)
+Map.addLayer(s2Clear, rgbVis, '5. Cleared Water True Color (Apr 2024)', false, 1.0);
+Map.addLayer(ndtiClear, ndtiVis, '4. Cleared Water NDTI (Apr 2024)', false, 0.9);
+Map.addLayer(ndtiChange, changeVis, '3. Plume Turbidity Anomaly (Peak - Clear)', false, 0.9);
+Map.addLayer(s2Peak, rgbVis, '2. Peak Plume True Color (Feb 2024)', true, 1.0);
+Map.addLayer(ndtiPeak, ndtiVis, '1. Peak Plume NDTI (Feb 2024)', true, 0.9);
+
+// Add transect station features matched to RStudio Okabe-Ito palette
+Map.addLayer(bufferedStations, {color: 'white'}, '1 km Sampling Buffers', false);
+Map.addLayer(ee.FeatureCollection([s1]), {color: 'D55E00'}, 'Station S1: Burdekin Mouth (4 km)', true);
+Map.addLayer(ee.FeatureCollection([s2]), {color: '0072B2'}, 'Station S2: Magnetic Island (88 km)', true);
+Map.addLayer(ee.FeatureCollection([s3]), {color: '009E73'}, 'Station S3: Davies Reef (135 km)', true);
+
+// On-map Legend using .ui functions (Workshop 2 Assignment Guidance, Sec. 3.9)
+var legend = ui.Panel({
+  style: {position: 'bottom-left', padding: '10px 14px', backgroundColor: 'rgba(255,255,255,0.92)'}
+});
+
+legend.add(ui.Label({
+  value: 'Sentinel-2 Water Turbidity (NDTI)',
+  style: {fontWeight: 'bold', fontSize: '13px', margin: '0 0 6px 0'}
+}));
+
+var palette = ndtiVis.palette;
+var labels  = ['-0.28 (Clear Coral Sea)', '-0.18 (Low)', '-0.08 (Dilute Plume)', '+0.02 (Moderate)', '+0.12 (Dense Sediment)'];
+
+for (var i = 0; i < palette.length; i++) {
+  legend.add(ui.Panel({
+    widgets: [
+      ui.Label({style: {backgroundColor: '#' + palette[i], padding: '8px', margin: '0 8px 4px 0'}}),
+      ui.Label({value: labels[i], style: {fontSize: '11px', margin: '0 0 4px 0'}})
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  }));
+}
+
+legend.add(ui.Label({
+  value: 'Transect Stations (Matched to R Plots)',
+  style: {fontWeight: 'bold', fontSize: '12px', margin: '8px 0 4px 0'}
+}));
+
+var stNames  = ['S1: Burdekin Mouth (4 km)', 'S2: Magnetic Island (88 km)', 'S3: Davies Reef (135 km)'];
+var stColors = ['#D55E00', '#0072B2', '#009E73'];
+
+for (var j = 0; j < stNames.length; j++) {
+  legend.add(ui.Panel({
+    widgets: [
+      ui.Label({style: {backgroundColor: stColors[j], padding: '6px', margin: '0 8px 3px 0'}}),
+      ui.Label({value: stNames[j], style: {fontSize: '11px', margin: '0 0 3px 0'}})
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  }));
+}
+
+Map.add(legend);
+
+// *************************************************************************
+// 8. PACKAGE UP RESULTS AND EXPORT (Workshop 4, Sec. 5.6)
+// *************************************************************************
 
 Export.table.toDrive({
-  collection: dissipationTS,
-  description: 'Flood_Plume_Dissipation_S3',
-  fileFormat: 'CSV'
+  collection: s3TimeSeries,
+  description: 'exportS3TimeSeriesToDrive',
+  fileNamePrefix: 'Burdekin_S3_Plume_TimeSeries',
+  fileFormat: 'CSV',
+  selectors: ['station', 'dist_km', 'date', 's3_turbidity_ratio']
+});
+
+Export.image.toDrive({
+  image: ndtiPeak.visualize(ndtiVis),
+  description: 'exportPeakNDTIImage',
+  fileNamePrefix: 'S2_NDTI_PeakPlume_Feb2024',
+  fileFormat: 'GeoTIFF',
+  region: roi,
+  scale: 30,
+  maxPixels: 1e9
+});
+
+Export.image.toDrive({
+  image: ndtiClear.visualize(ndtiVis),
+  description: 'exportClearNDTIImage',
+  fileNamePrefix: 'S2_NDTI_ClearedWater_Apr2024',
+  fileFormat: 'GeoTIFF',
+  region: roi,
+  scale: 30,
+  maxPixels: 1e9
 });
