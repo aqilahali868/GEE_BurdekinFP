@@ -44,9 +44,9 @@ var s3TimeSeries = s3.map(function(img) {
 print('Total valid observations:', s3TimeSeries.size());
 print('Preview first 5 rows:', s3TimeSeries.limit(5));
 
-Export.table.toDrive({
-  collection: s3TimeSeries,
-  description: 'Burdekin_S3_Plume_TimeSeries',
-  fileFormat: 'CSV',
-  selectors: ['station', 'dist_km', 'date', 's3_turbidity_ratio']
-});
+//Export.table.toDrive({
+//  collection: s3TimeSeries,
+//  description: 'Burdekin_S3_Plume_TimeSeries',
+//  fileFormat: 'CSV',
+//  selectors: ['station', 'dist_km', 'date', 's3_turbidity_ratio']
+//});
