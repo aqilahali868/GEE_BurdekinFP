@@ -121,3 +121,67 @@ for (var j = 0; j < stNames.length; j++) {
 
 Map.add(legend);
 
+
+// =========================================================================
+// REPRODUCIBLE EXPORTS (CSV FOR RSTUDIO + HIGH-RES MAP IMAGES)
+// =========================================================================
+
+// Sentinel-3 OLCI Daily Turbidity CSV (feeds BurdekinCatchment.Rmd)
+var s3 = ee.ImageCollection('COPERNICUS/S3/OLCI')
+  .filterBounds(roi)
+  .filterDate('2023-11-01', '2024-05-01')
+  .select(['Oa08_radiance', 'Oa04_radiance', 'quality_flags']);
+
+// Apply a 1 km open-water buffer around the Section 2 station points
+var bufferedStations = stations.map(function(feat) {
+  return feat.buffer(1000);
+});
+
+var s3TimeSeries = s3.map(function(img) {
+  var qf = img.select('quality_flags');
+  var notLand  = qf.bitwiseAnd(Math.pow(2, 31)).eq(0);
+  var notCloud = qf.bitwiseAnd(Math.pow(2, 27)).eq(0).and(img.select('Oa08_radiance').lt(120));
+
+  var turbRatio = img.select('Oa08_radiance')
+    .divide(img.select('Oa04_radiance'))
+    .updateMask(notLand.and(notCloud))
+    .rename('s3_turbidity_ratio');
+
+  var dateStr = img.date().format('YYYY-MM-dd');
+
+  return turbRatio.reduceRegions({
+    collection: bufferedStations,
+    reducer: ee.Reducer.mean(),
+    scale: 300
+  }).map(function(feat) {
+    return feat.set({
+      'date': dateStr,
+      's3_turbidity_ratio': feat.get('mean')
+    });
+  });
+}).flatten().filter(ee.Filter.notNull(['s3_turbidity_ratio']));
+
+//Export.table.toDrive({
+//  collection: s3TimeSeries,
+//  description: 'Burdekin_S3_Plume_TimeSeries',
+//  fileFormat: 'CSV',
+//  selectors: ['station', 'dist_km', 'date', 's3_turbidity_ratio']
+//});
+
+// B. (Optional) Export Color-Rendered Sentinel-2 NDTI Maps to Google Drive
+Export.image.toDrive({
+  image: ndtiPeak.visualize(ndtiVis),
+  description: 'S2_NDTI_PeakPlume_Feb2024',
+  region: roi,
+  scale: 30,
+  maxPixels: 1e9
+});
+
+Export.image.toDrive({
+  image: ndtiClear.visualize(ndtiVis),
+  description: 'S2_NDTI_ClearedWater_Apr2024',
+  region: roi,
+  scale: 30,
+  maxPixels: 1e9
+});
+
