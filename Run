@@ -1,0 +1,41 @@
+// 1. Inshore-to-offshore transect (Burdekin Mouth -> Magnetic Island -> Mid-Shelf)
+var stations = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([147.62, -19.63]), {station: 'S1_Burdekin_Mouth', dist_km: 2}),
+  ee.Feature(ee.Geometry.Point([146.86, -19.15]), {station: 'S2_Magnetic_Island', dist_km: 88}),
+  ee.Feature(ee.Geometry.Point([147.64, -18.82]), {station: 'S3_Davies_Reef', dist_km: 135})
+]);
+var roi = stations.geometry().bounds().buffer(30000);
+Map.centerObject(roi, 9);
+
+// 2. High-res Sentinel-2 Pre- vs Post-Flood Plume Maps (10 m)
+var s2Peak = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(roi)
+  .filterDate('2025-02-10', '2025-02-16')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 25))
+  .median().clip(roi);
+
+var ndti = s2Peak.normalizedDifference(['B4', 'B3']).rename('NDTI');
+Map.addLayer(s2Peak, {bands: ['B4', 'B3', 'B2'], min: 0, max: 2500}, 'S2 True Color (Peak Plume)');
+Map.addLayer(ndti, {min: -0.3, max: 0.2, palette: ['#08306b', '#41b6c4', '#ffffbf', '#d95f0e']}, 'S2 NDTI Turbidity');
+
+// 3. Daily Sentinel-3 OLCI Time-Series for Dissipation Rate Modeling (300 m)
+var s3 = ee.ImageCollection('COPERNICUS/S3/OLCI')
+  .filterBounds(roi)
+  .filterDate('2025-01-01', '2025-04-30')
+  .select(['Oa08_radiance', 'Oa04_radiance']);
+
+var dissipationTS = s3.map(function(img) {
+  var turbidityRatio = img.select('Oa08_radiance').divide(img.select('Oa04_radiance')).rename('Red_Blue_Ratio');
+  var dateStr = img.date().format('YYYY-MM-dd');
+  return turbidityRatio.reduceRegions({
+    collection: stations,
+    reducer: ee.Reducer.mean(),
+    scale: 300
+  }).map(function(f) { return f.set('date', dateStr); });
+}).flatten().filter(ee.Filter.notNull(['Red_Blue_Ratio']));
+
+Export.table.toDrive({
+  collection: dissipationTS,
+  description: 'Flood_Plume_Dissipation_S3',
+  fileFormat: 'CSV'
+});
